@@ -1,0 +1,760 @@
+create or replace PACKAGE MS_COMPLAINT_PKG AS
+
+    PROCEDURE CREATE_COMPLAINT (
+        P_COMPLAINT_NO           IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE,
+        P_COMPLAINT_DATE         IN MS_COMPLAINT_H.COMPLAINT_DATE%TYPE,
+        P_REPORTED_BY            IN MS_COMPLAINT_H.REPORTED_BY%TYPE,
+        P_DEPARTMENT_ID          IN MS_COMPLAINT_H.DEPARTMENT_ID%TYPE,
+        P_LINE_ID                IN MS_COMPLAINT_H.LINE_ID%TYPE,
+        P_MACHINE_ID             IN MS_COMPLAINT_H.MACHINE_ID%TYPE,
+        P_LOCATION_ID            IN MS_COMPLAINT_H.LOCATION_ID%TYPE,
+        P_FAULT_ID               IN MS_COMPLAINT_H.FAULT_ID%TYPE,
+        P_PRIORITY_ID            IN MS_COMPLAINT_H.PRIORITY_ID%TYPE,
+        P_FAULT_DESCRIPTION      IN MS_COMPLAINT_H.FAULT_DESCRIPTION%TYPE,
+        P_PRODUCTION_IMPACT      IN MS_COMPLAINT_H.PRODUCTION_IMPACT%TYPE,
+        P_MACHINE_STOPPED        IN MS_COMPLAINT_H.MACHINE_STOPPED%TYPE,
+        P_STATUS_CODE            IN MS_COMPLAINT_H.STATUS_CODE%TYPE,
+        P_REPORTED_DATE_TIME     IN MS_COMPLAINT_H.REPORTED_DATE_TIME%TYPE,
+        P_ACKNOWLEDGED_DATE_TIME IN MS_COMPLAINT_H.ACKNOWLEDGED_DATE_TIME%TYPE,
+        P_RESOLVED_DATE_TIME     IN MS_COMPLAINT_H.RESOLVED_DATE_TIME%TYPE,
+        P_CLOSED_DATE_TIME       IN MS_COMPLAINT_H.CLOSED_DATE_TIME%TYPE,
+        P_DOWNTIME_MINUTES       IN MS_COMPLAINT_H.DOWNTIME_MINUTES%TYPE,
+        P_REJECTION_REASON       IN MS_COMPLAINT_H.REJECTION_REASON%TYPE,
+        P_EXCEPTIONAL_CLOSURE    IN MS_COMPLAINT_H.EXCEPTIONAL_CLOSURE%TYPE,
+        P_REQUEST_TOKEN          IN MS_COMPLAINT_H.REQUEST_TOKEN%TYPE
+    );
+
+    PROCEDURE VERIFY_ACCEPT_COMPLAINT (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE );
+
+    FUNCTION VERIFY_ACCEPT_COMPLAINT_R (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE )
+    RETURN VARCHAR2;
+
+    FUNCTION VERIFY_ACCEPT_COMPLAINT_A (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE )
+    RETURN VARCHAR2;
+
+    PROCEDURE START_WORKING (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE );
+
+    PROCEDURE CLOSE_COMPLAINT (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE );
+
+    PROCEDURE CANCEL_COMPLAINT (
+        P_COMPLAINT_NO     IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE,
+        P_REJECTION_REASON IN MS_COMPLAINT_H.REJECTION_REASON%TYPE );
+
+    FUNCTION CLOSE_COMPLAINT_R (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE )
+    RETURN VARCHAR2;
+
+    FUNCTION SHOW_REGION (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE )
+    RETURN VARCHAR2;
+
+    PROCEDURE CREATE_MS_CHANGE_PART (
+        P_COMPLAINT_ID        IN MS_CHANGE_PART.COMPLAINT_ID%TYPE,
+        P_CHANGE_PART_ITEM_ID IN MS_CHANGE_PART.CHANGE_PART_ITEM_ID%TYPE,
+        P_CHANGE_PARTS_NAME   IN MS_CHANGE_PART.CHANGE_PARTS_NAME%TYPE,
+        P_CHANGE_PARTS_PRICE  IN MS_CHANGE_PART.CHANGE_PARTS_PRICE%TYPE,
+        P_CHANGE_PARTS_QTY    IN MS_CHANGE_PART.CHANGE_PARTS_QTY%TYPE,
+        P_REASON              IN MS_CHANGE_PART.REASON%TYPE,
+        P_REMARKS             IN MS_CHANGE_PART.REMARKS%TYPE );
+
+    FUNCTION SHOW_NEW_COMPLAINT_BTN (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE )
+    RETURN VARCHAR2;
+
+    FUNCTION MSG_HTML (
+        P_TYPE    IN VARCHAR2,
+        P_TITLE   IN VARCHAR2,
+        P_TEXT    IN VARCHAR2,
+        P_EYEBROW IN VARCHAR2 DEFAULT NULL,
+        P_ICON    IN VARCHAR2 DEFAULT NULL,
+        P_NO      IN VARCHAR2 DEFAULT NULL,
+        P_STATUS  IN VARCHAR2 DEFAULT NULL
+    ) RETURN VARCHAR2;
+
+    PROCEDURE SET_NOTICE (
+        P_ACTION       IN VARCHAR2,
+        P_COMPLAINT_NO IN VARCHAR2 DEFAULT NULL,
+        P_STATUS       IN VARCHAR2 DEFAULT NULL
+    );
+
+    FUNCTION APEX_ERROR_HANDLER (
+        P_ERROR IN APEX_ERROR.T_ERROR )
+    RETURN APEX_ERROR.T_ERROR_RESULT;
+
+END MS_COMPLAINT_PKG;
+/
+
+
+create or replace PACKAGE BODY MS_COMPLAINT_PKG AS
+
+    ------------------------------------------------------------------
+    -- MESSAGE HTML  (same HTML + CSS classes for every message type)
+    -- P_TYPE : success | warning | danger | info
+    ------------------------------------------------------------------
+    FUNCTION MSG_HTML (
+        P_TYPE    IN VARCHAR2,
+        P_TITLE   IN VARCHAR2,
+        P_TEXT    IN VARCHAR2,
+        P_EYEBROW IN VARCHAR2 DEFAULT NULL,
+        P_ICON    IN VARCHAR2 DEFAULT NULL,
+        P_NO      IN VARCHAR2 DEFAULT NULL,
+        P_STATUS  IN VARCHAR2 DEFAULT NULL
+    ) RETURN VARCHAR2
+    IS
+        L_TYPE    VARCHAR2(200);
+        L_ICON    VARCHAR2(200);
+        L_EYEBROW VARCHAR2(1000);
+        L_META    VARCHAR2(32767);
+        L_OUT     VARCHAR2(32767);
+    BEGIN
+        L_TYPE := LOWER(NVL(P_TYPE, 'info'));
+        IF L_TYPE NOT IN ('success', 'warning', 'danger', 'info') THEN
+            L_TYPE := 'info';
+        END IF;
+
+        L_ICON := NVL(P_ICON,
+                      CASE L_TYPE
+                          WHEN 'success' THEN 'fa-check-circle'
+                          WHEN 'warning' THEN 'fa-exclamation-triangle'
+                          WHEN 'danger'  THEN 'fa-times-circle'
+                          ELSE                'fa-info-circle'
+                      END);
+
+        L_EYEBROW := NVL(P_EYEBROW,
+                         CASE L_TYPE
+                             WHEN 'success' THEN 'Success'
+                             WHEN 'warning' THEN 'Action required'
+                             WHEN 'danger'  THEN 'Error'
+                             ELSE                'Information'
+                         END);
+
+        L_META := NULL;
+        IF P_NO IS NOT NULL OR P_STATUS IS NOT NULL THEN
+            L_META := '<div class="cmp-alert-meta">';
+            IF P_NO IS NOT NULL THEN
+                L_META := L_META ||
+                    '<div class="cmp-meta-item">' ||
+                      '<span class="cmp-meta-label">Complaint No</span>' ||
+                      '<span class="cmp-meta-value">' ||
+                          APEX_ESCAPE.HTML(SUBSTR(P_NO, 1, 500)) || '</span>' ||
+                    '</div>';
+            END IF;
+            IF P_STATUS IS NOT NULL THEN
+                L_META := L_META ||
+                    '<div class="cmp-meta-item">' ||
+                      '<span class="cmp-meta-label">Current Status</span>' ||
+                      '<span class="cmp-chip st-' ||
+                          REGEXP_REPLACE(LOWER(SUBSTR(P_STATUS, 1, 100)), '[^a-z_]', '') || '">' ||
+                          APEX_ESCAPE.HTML(SUBSTR(P_STATUS, 1, 100)) || '</span>' ||
+                    '</div>';
+            END IF;
+            L_META := L_META || '</div>';
+        END IF;
+
+        L_OUT :=
+            '<div class="cmp-alert cmp-' || L_TYPE || '">' ||
+              '<div class="cmp-alert-icon">' ||
+                '<span class="fa ' || L_ICON || '" aria-hidden="true"></span>' ||
+              '</div>' ||
+              '<div class="cmp-alert-body">' ||
+                '<span class="cmp-alert-eyebrow">' ||
+                    APEX_ESCAPE.HTML(SUBSTR(L_EYEBROW, 1, 200)) || '</span>' ||
+                '<strong class="cmp-alert-title">' ||
+                    APEX_ESCAPE.HTML(SUBSTR(P_TITLE, 1, 500)) || '</strong>';
+
+        IF P_TEXT IS NOT NULL THEN
+            L_OUT := L_OUT || '<p class="cmp-alert-text">' ||
+                     APEX_ESCAPE.HTML(SUBSTR(P_TEXT, 1, 1500)) || '</p>';
+        END IF;
+
+        L_OUT := L_OUT || L_META || '</div></div>';
+
+        RETURN L_OUT;
+    END MSG_HTML;
+
+
+    ------------------------------------------------------------------
+    -- SUCCESS NOTICE.  A message problem must NEVER stop the real save,
+    -- so any failure falls back to a plain text message.
+    ------------------------------------------------------------------
+    PROCEDURE SET_NOTICE (
+        P_ACTION       IN VARCHAR2,
+        P_COMPLAINT_NO IN VARCHAR2 DEFAULT NULL,
+        P_STATUS       IN VARCHAR2 DEFAULT NULL
+    )
+    IS
+        L_MSG VARCHAR2(32767);
+    BEGIN
+        L_MSG :=
+            CASE UPPER(P_ACTION)
+                WHEN 'CREATE' THEN
+                    MSG_HTML('success', 'Complaint registered',
+                             'Your complaint has been submitted successfully.',
+                             'Created', 'fa-check-circle', P_COMPLAINT_NO, P_STATUS)
+                WHEN 'UPDATE' THEN
+                    MSG_HTML('info', 'Complaint updated',
+                             'The changes have been saved successfully.',
+                             'Updated', 'fa-pencil', P_COMPLAINT_NO, P_STATUS)
+                WHEN 'INSERT' THEN
+                    MSG_HTML('success', 'Change part added',
+                             'The change part has been saved successfully.',
+                             'Added', 'fa-wrench', P_COMPLAINT_NO, P_STATUS)
+                WHEN 'DELETE' THEN
+                    MSG_HTML('danger', 'Complaint deleted',
+                             'The complaint has been removed permanently.',
+                             'Deleted', 'fa-trash', P_COMPLAINT_NO, P_STATUS)
+                ELSE
+                    MSG_HTML('info', 'Done',
+                             'The action was completed successfully.',
+                             NULL, NULL, P_COMPLAINT_NO, P_STATUS)
+            END;
+
+        APEX_APPLICATION.G_PRINT_SUCCESS_MESSAGE := L_MSG;
+
+    EXCEPTION
+        WHEN OTHERS THEN
+            BEGIN
+                APEX_APPLICATION.G_PRINT_SUCCESS_MESSAGE :=
+                    'Action completed successfully.';
+            EXCEPTION
+                WHEN OTHERS THEN NULL;
+            END;
+    END SET_NOTICE;
+
+    ------------------------------------------------------------------
+    -- 1. CREATE COMPLAINT
+    ------------------------------------------------------------------
+    PROCEDURE CREATE_COMPLAINT (
+        P_COMPLAINT_NO           IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE,
+        P_COMPLAINT_DATE         IN MS_COMPLAINT_H.COMPLAINT_DATE%TYPE,
+        P_REPORTED_BY            IN MS_COMPLAINT_H.REPORTED_BY%TYPE,
+        P_DEPARTMENT_ID          IN MS_COMPLAINT_H.DEPARTMENT_ID%TYPE,
+        P_LINE_ID                IN MS_COMPLAINT_H.LINE_ID%TYPE,
+        P_MACHINE_ID             IN MS_COMPLAINT_H.MACHINE_ID%TYPE,
+        P_LOCATION_ID            IN MS_COMPLAINT_H.LOCATION_ID%TYPE,
+        P_FAULT_ID               IN MS_COMPLAINT_H.FAULT_ID%TYPE,
+        P_PRIORITY_ID            IN MS_COMPLAINT_H.PRIORITY_ID%TYPE,
+        P_FAULT_DESCRIPTION      IN MS_COMPLAINT_H.FAULT_DESCRIPTION%TYPE,
+        P_PRODUCTION_IMPACT      IN MS_COMPLAINT_H.PRODUCTION_IMPACT%TYPE,
+        P_MACHINE_STOPPED        IN MS_COMPLAINT_H.MACHINE_STOPPED%TYPE,
+        P_STATUS_CODE            IN MS_COMPLAINT_H.STATUS_CODE%TYPE,
+        P_REPORTED_DATE_TIME     IN MS_COMPLAINT_H.REPORTED_DATE_TIME%TYPE,
+        P_ACKNOWLEDGED_DATE_TIME IN MS_COMPLAINT_H.ACKNOWLEDGED_DATE_TIME%TYPE,
+        P_RESOLVED_DATE_TIME     IN MS_COMPLAINT_H.RESOLVED_DATE_TIME%TYPE,
+        P_CLOSED_DATE_TIME       IN MS_COMPLAINT_H.CLOSED_DATE_TIME%TYPE,
+        P_DOWNTIME_MINUTES       IN MS_COMPLAINT_H.DOWNTIME_MINUTES%TYPE,
+        P_REJECTION_REASON       IN MS_COMPLAINT_H.REJECTION_REASON%TYPE,
+        P_EXCEPTIONAL_CLOSURE    IN MS_COMPLAINT_H.EXCEPTIONAL_CLOSURE%TYPE,
+        P_REQUEST_TOKEN          IN MS_COMPLAINT_H.REQUEST_TOKEN%TYPE
+    )
+    IS
+        L_COMPLAINT_NO  MS_COMPLAINT_H.COMPLAINT_NO%TYPE;
+        L_STATUS_CODE   MS_COMPLAINT_H.STATUS_CODE%TYPE;
+    BEGIN
+
+        -- Rule: new complaint on a machine only if all its earlier
+        -- complaints are finished (CLOSED or CANCELLED)
+        IF P_MACHINE_ID IS NOT NULL THEN
+            BEGIN
+                SELECT H.COMPLAINT_NO, H.STATUS_CODE
+                  INTO L_COMPLAINT_NO, L_STATUS_CODE
+                  FROM MS_COMPLAINT_H H
+                 WHERE H.MACHINE_ID = P_MACHINE_ID
+                   AND NVL(UPPER(H.STATUS_CODE), 'X') NOT IN ('CLOSED', 'CANCELLED')
+                 ORDER BY H.COMPLAINT_DATE DESC NULLS LAST,
+                          H.COMPLAINT_ID DESC
+                 FETCH FIRST 1 ROW ONLY;
+
+                RAISE_APPLICATION_ERROR(-20003,
+                    'OPEN_COMPLAINT|' || L_COMPLAINT_NO || '|' || L_STATUS_CODE);
+
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    NULL;   -- no open complaint, continue
+            END;
+        END IF;
+
+        INSERT INTO MS_COMPLAINT_H (
+            COMPLAINT_NO,
+            COMPLAINT_DATE,
+            REPORTED_BY,
+            DEPARTMENT_ID,
+            LINE_ID,
+            MACHINE_ID,
+            LOCATION_ID,
+            FAULT_ID,
+            PRIORITY_ID,
+            FAULT_DESCRIPTION,
+            PRODUCTION_IMPACT,
+            MACHINE_STOPPED,
+            STATUS_CODE,
+            REPORTED_DATE_TIME,
+            ACKNOWLEDGED_DATE_TIME,
+            RESOLVED_DATE_TIME,
+            CLOSED_DATE_TIME,
+            DOWNTIME_MINUTES,
+            REOPEN_COUNT,
+            REJECTION_REASON,
+            EXCEPTIONAL_CLOSURE,
+            REQUEST_TOKEN
+        )
+        VALUES (
+            P_COMPLAINT_NO,
+            NVL(P_COMPLAINT_DATE, SYSDATE),
+            P_REPORTED_BY,
+            P_DEPARTMENT_ID,
+            P_LINE_ID,
+            P_MACHINE_ID,
+            P_LOCATION_ID,
+            P_FAULT_ID,
+            P_PRIORITY_ID,
+            P_FAULT_DESCRIPTION,
+            NVL(P_PRODUCTION_IMPACT, 'PARTIAL_STOP'),
+            NVL(P_MACHINE_STOPPED, 'Y'),
+            P_STATUS_CODE,
+            NVL(P_REPORTED_DATE_TIME, SYSDATE),
+            P_ACKNOWLEDGED_DATE_TIME,
+            P_RESOLVED_DATE_TIME,
+            P_CLOSED_DATE_TIME,
+            NVL(P_DOWNTIME_MINUTES, 0),
+            0,
+            P_REJECTION_REASON,
+            P_EXCEPTIONAL_CLOSURE,
+            P_REQUEST_TOKEN
+        );
+
+        -- success popup (green)
+        SET_NOTICE('CREATE', P_COMPLAINT_NO, P_STATUS_CODE);
+
+    EXCEPTION
+        WHEN DUP_VAL_ON_INDEX THEN
+            RAISE_APPLICATION_ERROR(
+                -20001,
+                'Duplicate complaint ID, complaint number, or request token.'
+            );
+        WHEN OTHERS THEN
+            RAISE;
+    END CREATE_COMPLAINT;
+
+
+    ------------------------------------------------------------------
+    -- ERROR HANDLING MESSAGE  (Application > Error Handling Function:
+    --                          MS_COMPLAINT_PKG.APEX_ERROR_HANDLER)
+    ------------------------------------------------------------------
+    FUNCTION APEX_ERROR_HANDLER (
+        P_ERROR IN APEX_ERROR.T_ERROR
+    ) RETURN APEX_ERROR.T_ERROR_RESULT
+    IS
+        L_RESULT APEX_ERROR.T_ERROR_RESULT;
+        L_TEXT   VARCHAR2(4000);
+        L_NO     VARCHAR2(100);
+        L_STATUS VARCHAR2(100);
+    BEGIN
+        L_RESULT := APEX_ERROR.INIT_ERROR_RESULT(P_ERROR => P_ERROR);
+
+        IF P_ERROR.IS_INTERNAL_ERROR = FALSE
+           AND P_ERROR.ORA_SQLCODE IN (-20001, -20002, -20003, -2292) THEN
+
+            L_TEXT := REGEXP_REPLACE(
+                        APEX_ERROR.GET_FIRST_ORA_ERROR_TEXT(P_ERROR => P_ERROR),
+                        '^ORA-\d+:\s*', '');
+
+            IF L_TEXT LIKE 'OPEN_COMPLAINT|%' THEN
+                -- machine already has an open complaint  (amber)
+                L_NO     := REGEXP_SUBSTR(L_TEXT, '[^|]+', 1, 2);
+                L_STATUS := REGEXP_SUBSTR(L_TEXT, '[^|]+', 1, 3);
+
+                L_RESULT.MESSAGE := MSG_HTML(
+                    'warning',
+                    'Complaint already exists for this machine',
+                    'Please close it before registering a new one.',
+                    'Action required', NULL, L_NO, L_STATUS);
+
+            ELSIF P_ERROR.ORA_SQLCODE = -2292 THEN
+                -- delete blocked by related records  (red)
+                L_RESULT.MESSAGE := MSG_HTML(
+                    'danger',
+                    'Cannot delete this record',
+                    'It is linked with other records. Please remove those first.',
+                    'Delete failed', 'fa-trash');
+
+            ELSE
+                -- any other custom error  (red)
+                L_RESULT.MESSAGE := MSG_HTML(
+                    'danger',
+                    'Unable to complete the request',
+                    L_TEXT);
+            END IF;
+
+            L_RESULT.ADDITIONAL_INFO  := NULL;   -- removes the (i) icon
+            L_RESULT.DISPLAY_LOCATION := APEX_ERROR.C_INLINE_IN_NOTIFICATION;
+        END IF;
+
+        RETURN L_RESULT;
+    END APEX_ERROR_HANDLER;
+
+
+    ------------------------------------------------------------------
+    -- 2. VERIFY / ACCEPT COMPLAINT
+    -- Updates complaint status to ACKNOWLEDGED
+    ------------------------------------------------------------------
+    PROCEDURE VERIFY_ACCEPT_COMPLAINT (P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE)
+    IS
+    BEGIN
+        UPDATE MS_COMPLAINT_H
+           SET STATUS_CODE = 'ACKNOWLEDGED',
+               ACKNOWLEDGED_DATE_TIME = NVL(ACKNOWLEDGED_DATE_TIME, SYSDATE)
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO
+           AND STATUS_CODE = 'Submitted';
+
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20002, 'Complaint not found.');
+        END IF;
+    END VERIFY_ACCEPT_COMPLAINT;
+
+    ------------------------------------------------------------------
+    -- 3. RETURN Y/N
+    -- Checks whether complaint is still waiting to be acknowledged
+    ------------------------------------------------------------------
+    FUNCTION VERIFY_ACCEPT_COMPLAINT_R (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE
+    )
+    RETURN VARCHAR2
+    IS
+        L_STATUS MS_COMPLAINT_H.STATUS_CODE%TYPE;
+    BEGIN
+        SELECT STATUS_CODE
+          INTO L_STATUS
+          FROM MS_COMPLAINT_H
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO;
+
+        IF L_STATUS = 'Submitted' THEN
+            RETURN 'Y';
+        ELSE
+            RETURN 'N';
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 'N';
+        WHEN TOO_MANY_ROWS THEN
+            RETURN 'N';
+    END VERIFY_ACCEPT_COMPLAINT_R;
+
+    --------------------------START WORKING------------------------------
+    -- RESOLVED_DATE_TIME = time when work started.
+    -- PARTIAL_STOP downtime is counted from this time until CLOSE.
+    PROCEDURE START_WORKING (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE
+    )
+    IS
+    BEGIN
+        UPDATE MS_COMPLAINT_H
+           SET STATUS_CODE = 'IN_PROGRESS',
+               RESOLVED_DATE_TIME = NVL(RESOLVED_DATE_TIME, SYSDATE)
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO
+           AND STATUS_CODE = 'ACKNOWLEDGED';
+
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20002, 'Complaint not found.');
+        END IF;
+    END START_WORKING;
+
+    ---------------------------------------------------
+
+    FUNCTION VERIFY_ACCEPT_COMPLAINT_A (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE
+    )
+    RETURN VARCHAR2
+    IS
+        L_STATUS MS_COMPLAINT_H.STATUS_CODE%TYPE;
+    BEGIN
+        SELECT STATUS_CODE
+          INTO L_STATUS
+          FROM MS_COMPLAINT_H
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO;
+
+        IF L_STATUS = 'ACKNOWLEDGED' THEN
+            RETURN 'Y';
+        ELSE
+            RETURN 'N';
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 'N';
+        WHEN TOO_MANY_ROWS THEN
+            RETURN 'N';
+    END VERIFY_ACCEPT_COMPLAINT_A;
+
+
+    ---------------------------CLOSE----------------------
+    -- Rules:
+    --  1) IN_PROGRESS -> CLOSED must have at least 2 minutes gap.
+    --  2) PRODUCTION_IMPACT = PARTIAL_STOP :
+    --        downtime = START WORKING time  -> CLOSE time
+    --  3) PRODUCTION_IMPACT = FULL_STOP :
+    --        downtime = SUBMITTED time      -> CLOSE time
+    PROCEDURE CLOSE_COMPLAINT (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE
+    )
+    IS
+        C_MIN_GAP_MINUTES CONSTANT NUMBER := 2;
+
+        L_STATUS    MS_COMPLAINT_H.STATUS_CODE%TYPE;
+        L_IMPACT    MS_COMPLAINT_H.PRODUCTION_IMPACT%TYPE;
+        L_REPORTED  DATE;      -- Submitted time
+        L_STARTED   DATE;      -- Start Working time (RESOLVED_DATE_TIME)
+        L_CLOSED    DATE;
+        L_FROM      DATE;
+        L_DOWNTIME  NUMBER;
+        L_GAP_SECS  NUMBER;
+        L_WAIT_SECS NUMBER;
+    BEGIN
+        BEGIN
+            SELECT STATUS_CODE,
+                   PRODUCTION_IMPACT,
+                   REPORTED_DATE_TIME,
+                   RESOLVED_DATE_TIME,
+                   NVL(CLOSED_DATE_TIME, SYSDATE)
+              INTO L_STATUS, L_IMPACT, L_REPORTED, L_STARTED, L_CLOSED
+              FROM MS_COMPLAINT_H
+             WHERE COMPLAINT_NO = P_COMPLAINT_NO
+               FOR UPDATE;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                RAISE_APPLICATION_ERROR(-20002, 'Complaint not found.');
+        END;
+
+        IF L_STATUS <> 'IN_PROGRESS' THEN
+            RAISE_APPLICATION_ERROR(-20002,
+                'Only an In Progress complaint can be closed.');
+        END IF;
+
+        -- Rule 1: minimum 2 minutes between IN_PROGRESS and CLOSED
+        IF L_STARTED IS NOT NULL THEN
+            L_GAP_SECS := (L_CLOSED - L_STARTED) * 86400;
+            IF L_GAP_SECS < C_MIN_GAP_MINUTES * 60 THEN
+                L_WAIT_SECS := CEIL(C_MIN_GAP_MINUTES * 60 - L_GAP_SECS);
+                RAISE_APPLICATION_ERROR(-20002,
+                    'Minimum ' || C_MIN_GAP_MINUTES ||
+                    ' minutes are required between Start Working and Close. ' ||
+                    'Please wait ' || L_WAIT_SECS || ' more second(s).');
+            END IF;
+        END IF;
+
+        -- Rule 2 / 3: from which time the downtime is counted
+        IF UPPER(L_IMPACT) = 'FULL_STOP' THEN
+            L_FROM := NVL(L_REPORTED, L_STARTED);   -- Submitted -> Close
+        ELSE
+            L_FROM := NVL(L_STARTED, L_REPORTED);   -- Start Working -> Close
+        END IF;
+
+        IF L_FROM IS NOT NULL THEN
+            L_DOWNTIME := ROUND((L_CLOSED - L_FROM) * 1440);
+        ELSE
+            L_DOWNTIME := 0;
+        END IF;
+
+        UPDATE MS_COMPLAINT_H
+           SET STATUS_CODE       = 'CLOSED',
+               CLOSED_DATE_TIME  = L_CLOSED,
+               PRODUCTION_IMPACT = 'QUALITY_ISSUE',
+               MACHINE_STOPPED   = 'N',
+               DOWNTIME_MINUTES  = L_DOWNTIME
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO
+           AND STATUS_CODE  = 'IN_PROGRESS';
+
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20002, 'Complaint not found.');
+        END IF;
+    END CLOSE_COMPLAINT;
+
+    ----------------------------CANCEL COMPLAINT----------------------------
+
+    PROCEDURE CANCEL_COMPLAINT (
+        P_COMPLAINT_NO     IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE,
+        P_REJECTION_REASON IN MS_COMPLAINT_H.REJECTION_REASON%TYPE
+    )
+    IS
+    BEGIN
+        -- check reason first, before touching the data
+        IF P_REJECTION_REASON IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20002, 'Rejection Reason Must Be Entered.');
+        END IF;
+
+        UPDATE MS_COMPLAINT_H
+           SET STATUS_CODE          = 'CANCELLED',
+               PRODUCTION_IMPACT    = 'QUALITY_ISSUE',
+               MACHINE_STOPPED      = 'N',
+               REJECTION_REASON     = P_REJECTION_REASON,
+               REJECTION_DATE_TIME  = NVL(REJECTION_DATE_TIME, SYSDATE),
+               DOWNTIME_MINUTES  =
+                   CASE
+                       WHEN REPORTED_DATE_TIME IS NOT NULL THEN
+                           ROUND(
+                               (
+                                   NVL(CLOSED_DATE_TIME, SYSDATE)
+                                   - REPORTED_DATE_TIME
+                               ) * 1440
+                           )
+                       ELSE 0
+                   END
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO
+           AND STATUS_CODE = 'IN_PROGRESS';
+
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20002, 'Complaint not found.');
+        END IF;
+    END CANCEL_COMPLAINT;
+
+    ----------------------------FUNCTION CLOSE------------------------------
+
+    FUNCTION CLOSE_COMPLAINT_R (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE
+    )
+    RETURN VARCHAR2
+    IS
+        L_STATUS MS_COMPLAINT_H.STATUS_CODE%TYPE;
+    BEGIN
+        SELECT STATUS_CODE
+          INTO L_STATUS
+          FROM MS_COMPLAINT_H
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO;
+
+        IF L_STATUS = 'IN_PROGRESS' THEN
+            RETURN 'Y';
+        ELSE
+            RETURN 'N';
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 'N';
+        WHEN TOO_MANY_ROWS THEN
+            RETURN 'N';
+    END CLOSE_COMPLAINT_R;
+
+    --------------------------------------ADDITIONAL REGIONS SHOW--------------------------------
+
+    FUNCTION SHOW_REGION ( P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE )
+    RETURN VARCHAR2
+    IS
+        L_STATUS MS_COMPLAINT_H.STATUS_CODE%TYPE;
+    BEGIN
+        SELECT STATUS_CODE
+          INTO L_STATUS
+          FROM MS_COMPLAINT_H
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO;
+
+        IF L_STATUS = 'IN_PROGRESS' THEN
+            RETURN 'Y';
+        ELSE
+            RETURN 'N';
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 'N';
+        WHEN TOO_MANY_ROWS THEN
+            RETURN 'N';
+    END SHOW_REGION;
+
+
+    ----------------------------------ADD CHANGE PART---------------------
+
+    PROCEDURE CREATE_MS_CHANGE_PART (
+        P_COMPLAINT_ID        IN MS_CHANGE_PART.COMPLAINT_ID%TYPE,
+        P_CHANGE_PART_ITEM_ID IN MS_CHANGE_PART.CHANGE_PART_ITEM_ID%TYPE,
+        P_CHANGE_PARTS_NAME   IN MS_CHANGE_PART.CHANGE_PARTS_NAME%TYPE,
+        P_CHANGE_PARTS_PRICE  IN MS_CHANGE_PART.CHANGE_PARTS_PRICE%TYPE,
+        P_CHANGE_PARTS_QTY    IN MS_CHANGE_PART.CHANGE_PARTS_QTY%TYPE,
+        P_REASON              IN MS_CHANGE_PART.REASON%TYPE,
+        P_REMARKS             IN MS_CHANGE_PART.REMARKS%TYPE
+    )
+    IS
+        L_COMPLAINT_NO MS_COMPLAINT_H.COMPLAINT_NO%TYPE;
+        L_STATUS       MS_COMPLAINT_H.STATUS_CODE%TYPE;
+    BEGIN
+
+    -- VALIDATIONS
+    IF P_CHANGE_PARTS_NAME IS NULL THEN
+            RAISE_APPLICATION_ERROR( -20002,'Parts Must Be Entered.' );
+    ELSIF P_CHANGE_PARTS_QTY IS NULL THEN   
+            RAISE_APPLICATION_ERROR(-20003,'Parts QTY Must Be Entered.' );
+    END IF;
+
+
+
+
+
+        INSERT INTO MS_CHANGE_PART (
+            COMPLAINT_ID,
+            CHANGE_PART_ITEM_ID,
+            CHANGE_PARTS_NAME,
+            CHANGE_PARTS_PRICE,
+            CHANGE_PARTS_QTY,
+            REASON,
+            REMARKS
+        ) VALUES (
+            P_COMPLAINT_ID,
+            P_CHANGE_PART_ITEM_ID,
+            P_CHANGE_PARTS_NAME,
+            P_CHANGE_PARTS_PRICE,
+            P_CHANGE_PARTS_QTY,
+            P_REASON,
+            P_REMARKS
+        );
+
+        -- popup should show the complaint NUMBER, not the internal ID
+        BEGIN
+            SELECT H.COMPLAINT_NO, H.STATUS_CODE
+              INTO L_COMPLAINT_NO, L_STATUS
+              FROM MS_COMPLAINT_H H
+             WHERE H.COMPLAINT_ID = P_COMPLAINT_ID;
+        EXCEPTION
+            WHEN OTHERS THEN
+                L_COMPLAINT_NO := NULL;
+                L_STATUS       := NULL;
+        END;
+
+        SET_NOTICE('INSERT', L_COMPLAINT_NO, L_STATUS);
+
+    EXCEPTION
+        WHEN DUP_VAL_ON_INDEX THEN
+            RAISE_APPLICATION_ERROR(-20001,'This change part is already added for this complaint.' );
+        WHEN OTHERS THEN
+            RAISE;
+    END CREATE_MS_CHANGE_PART;
+
+    -----------------SHOW COMPLAINT NEW BTN-----------
+    -- New complaint button is available once the old one is finished
+    -- (CLOSED or CANCELLED)
+
+    FUNCTION SHOW_NEW_COMPLAINT_BTN (
+        P_COMPLAINT_NO IN MS_COMPLAINT_H.COMPLAINT_NO%TYPE
+    )
+    RETURN VARCHAR2
+    IS
+        L_STATUS MS_COMPLAINT_H.STATUS_CODE%TYPE;
+    BEGIN
+        SELECT STATUS_CODE
+          INTO L_STATUS
+          FROM MS_COMPLAINT_H
+         WHERE COMPLAINT_NO = P_COMPLAINT_NO;
+
+        IF UPPER(L_STATUS) IN ('CLOSED', 'CANCELLED') THEN
+            RETURN 'Y';
+        ELSE
+            RETURN 'N';
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 'N';
+        WHEN TOO_MANY_ROWS THEN
+            RETURN 'N';
+    END SHOW_NEW_COMPLAINT_BTN;
+
+END MS_COMPLAINT_PKG;
+/
